@@ -1,0 +1,207 @@
+# The python script below is the merge between the Tweepy, Alpaca, textblob and Steamlit APIs to showecase what the function will be for live changes for different end users who want to find which stocks should be consider based on poliarity, FURU and timing
+# Below are the follwing requirements needed to produce the neccesary codes for the python script:
+
+import streamlit as st
+import os
+import requests
+import pandas as pd
+from dotenv import load_dotenv
+import json
+import numpy as np
+import re
+import textblob
+import tweepy
+import datetime, time
+import sys
+import threading
+
+import alpaca_trade_api as alpaca_api
+import matplotlib.pyplot as plt4
+from alpaca_trade_api.rest import REST
+import os
+###
+
+#Image for our Streamlit
+from PIL import Image
+image = Image.open("tape.png")
+
+#to load our reqiured enviorments and alpaca paper trading url
+load_dotenv()
+BASE_URL = os.getenv("BASE_URL")
+
+#streamlit containers to visually groups other elements and widgets together:
+header = st.container()
+about = st.container()
+dataset = st.container()
+feature = st.container()
+modelTraining = st.container()
+Twitter_API_KEY = st.container()
+Alpace_API_KEY = st.container()
+Twitter_User = st.container()
+test_container = st.container()
+
+#the following is the Streamlit code that produces are requirements and inputs:
+
+with header:
+    st.title('Tape')
+    st.image(image)
+    st.subheader("Now Anyone Can Trade Like Their Favorite Furu")
+
+# Using the "with" syntax
+with st.form(key='my_form'):	
+    st.subheader("Twitter Consumer Key")
+    twitter_consumer_key = st.text_input("What is your Twitter Consumer Key?", "oaWmhUXElzzCHOvngAUIQUcks", type = "password")
+    #st.write(twitter_consumer_key )
+    
+    st.subheader("Twitter Consumer Secret")
+    twitter_consumer_secret = st.text_input("What is your Twitter Consumer Secret", "S0pUvz4dCVFWJnyCXttKqqJPA1pDuSTtfI6KzNBNt5O2T8WDh3", type = "password")
+    #st.write(twitter_consumer_secret)
+
+    st.subheader("Twitter Access Token")
+    twitter_access_token = st.text_input("What is your Twitter Access Token", "2868393559-h7lM9ZwG0W9pDOJmcsQxjDXBctMvzL6lqc9Wcdr", type = "password")
+    #st.write(twitter_access_token)
+
+    st.subheader("Twitter Access Token Secret")
+    twitter_access_token_secret = st.text_input("What is your Twitter Access Token Secret", "OMynVUNKrpRM48HV88c0RPdycbsK7xbcKdIWqbRnzY2h7", type = "password")
+    #st.write(twitter_access_token_secret)
+
+    st.subheader("Twitter User")
+    twitter_user = st.text_input("Enter Twitter Furu Handle:", "ultra_calls")
+    twitter_users = [user.strip() for user in twitter_user.split(",")]
+    st.write(twitter_user)
+    # st.write(twitter_users)
+
+    st.subheader("Alpaca API Key")
+    alpaca_key = st.text_input("What is your Alpaca API Key?", "PKGL41QSB4387WI1QZ09", type = "password")
+    #st.write(alpaca__key )
+    
+    st.subheader("Alpaca Secret Key")
+    alpaca_secrect_key = st.text_input("What is your Alpaca Secret Key?", "1FAiCPSwmexHhbfMXxLc0i84oIlLQnjEUML6xstf", type = "password")
+    #st.write(alpaca_secret_key )
+
+    quanity = st.number_input("number of stocks")
+    
+    submit_button = st.form_submit_button(label='Submit')
+
+
+# This is to make sure that the limit we have set on our Developer Account does not go over the limit requirements
+
+auth_handler = tweepy.OAuthHandler(twitter_consumer_key, twitter_consumer_secret)
+auth_handler.set_access_token(twitter_access_token, twitter_access_token_secret)
+twitter_api = tweepy.API(auth_handler, wait_on_rate_limit=True)
+
+
+# instantiate REST API
+alpaca = alpaca_api.REST(alpaca_key, alpaca_secrect_key,BASE_URL, api_version='v2')
+
+# obtain Alpaca account information
+account = alpaca.get_account()
+print(account)
+
+#the next line of code will create and automate the tweepy API through the twitter user, polarity:
+
+#Variables to build the Tweepy Cursor
+tweet_amount = 100
+tweets = []
+likes = []
+time = []
+
+#This Line of code is to clear up the tweets that we are pulling from the user
+
+def clean_tweet(tweetz):
+    tweetz = tweetz.replace('@', '')
+    tweetz = tweetz.replace('http\S+', '')
+    return tweetz
+
+
+# Loop function to provide the information for the tweets and Like count
+records = []
+for user in twitter_users:
+    print(user)
+    for i in tweepy.Cursor(twitter_api.user_timeline, screen_name=user, include_rts=False, tweet_mode='extended').items(tweet_amount):
+        record = {}
+        record['user'] = user
+        record['Tweets'] = clean_tweet(i.full_text)
+        record['favorite_count'] = i.favorite_count
+        record['created_at'] = i.created_at
+        records.append(record)
+# this creates our dataframe to be used to produce our end output for the Alpaca API
+tweets_df = pd.DataFrame(records)
+def find_ticker(word):
+    if any(ch.isdigit() for ch in word):
+        return None
+    else:
+        return word
+
+
+# Using the sentiment analysis from textblob, to determine whether the tweet is negative or postive 
+
+tweets_df['Ticker'] = tweets_df['Tweets'].apply(lambda x: [find_ticker(word) for word in x.split() if '$' in word])
+
+tweets_df['Polarity'] = tweets_df['Tweets'].map(lambda tweet: textblob.TextBlob(tweet).sentiment.polarity)
+tweets_df['Result'] = tweets_df['Polarity'].map(lambda pol: '+' if pol > 0 else '-')
+positive = tweets_df[tweets_df.Result == '+'].count()['Tweets']
+negative = tweets_df[tweets_df.Result == '-'].count()['Tweets']
+
+
+# As a group we determined that a postive vaule of .3 would provide the ideal returns
+
+tweets_df['buy'] = tweets_df['Polarity'] >= .3
+
+#Code cleans up the stock acrynom so we can have it ready for the Alpaca API
+
+def clean_ticker(row):
+    tickers = [ticker for ticker in row if ticker != None]
+    return tickers
+
+#creates a clean list of stocks that will be shown on streamlit and removes duplicity from the code
+
+tweets_df['buy_list'] = tweets_df['Ticker'].apply(lambda row: clean_ticker(row))
+
+tweets_df = tweets_df[tweets_df["buy"]==True]
+buy_list = []
+for idx, row in tweets_df.iterrows():
+    for ticker in row['buy_list']:
+        if ticker:
+            buy_list.append(ticker)
+clean_buy_list = set(buy_list)
+
+st.write(clean_buy_list)
+
+#this is the end of the Tweepy / textblob API input
+
+#Below is the line of code that is used for Alpaca's API
+
+#As a group we are using the Alpaca stop/loss code to showcase what is being purchased through the Paper trading account
+
+def buy_ticker(ticker):
+    print("using alpaca....")
+    symbol_bars = alpaca.get_barset(ticker, 'minute', 1).df.iloc[0]
+    symbol_price = symbol_bars[ticker]['close']
+    alpaca.submit_order(
+            symbol=ticker,
+            qty= quanity,
+            side='buy',
+            type='market',
+            time_in_force='gtc',
+            order_class='bracket',
+            stop_loss = {
+                'stop_price':symbol_price * 0.95,
+                'limit_price':  symbol_price * 0.95
+            },
+              take_profit={'limit_price': (symbol_price * 1.10)}
+    )
+   
+    print(f"Just bought {ticker}...")
+
+#this will highlight in the termanial which stocks were purchased
+
+buy_ticker_list = [t.split("$")[1] for t in clean_buy_list]
+for ticker in buy_ticker_list:
+    try:
+        print('running ......')
+        buy_ticker(ticker)
+
+    except Exception as e:
+        print(e)
+        print('skipping', ticker)
